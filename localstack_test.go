@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -122,6 +123,33 @@ func TestLocalStackWithContext(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, l.StartWithContext(ctx))
 			s.expect(t, l)
+		})
+	}
+}
+
+func TestLocalStackWithIndividualServicesOnContext(t *testing.T) {
+	cl := http.Client{Timeout: time.Second}
+	for service := range localstack.AvailableServices {
+		t.Run(service.Name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			l, err := localstack.NewInstance([]localstack.InstanceOption{localstack.WithVersion("0.11.4")}...)
+			require.NoError(t, err)
+			require.NoError(t, l.StartWithContext(ctx, service))
+			for testService := range localstack.AvailableServices {
+				if testService == service || testService == localstack.DynamoDB {
+					conn, err := net.DialTimeout("tcp", strings.TrimPrefix("http://", l.EndpointV2(testService)), time.Second)
+					require.NoError(t, err, testService)
+					require.NoError(t, conn.Close())
+				} else if testService != localstack.FixedPort {
+					_, err := net.DialTimeout("tcp", strings.TrimPrefix("http://", l.EndpointV2(testService)), time.Second)
+					require.Error(t, err, testService)
+				}
+			}
+			cancel()
+			require.Eventually(t, func() bool {
+				_, err := cl.Get(l.EndpointV2(service))
+				return err != nil
+			}, time.Minute, time.Second)
 		})
 	}
 }
